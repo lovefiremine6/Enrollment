@@ -1,0 +1,4 @@
+{
+  "name": "enrollment-proxy",
+  "scripts": { "start": "node proxy.js" }
+}
