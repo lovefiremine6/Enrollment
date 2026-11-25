@@ -1,4 +1,60 @@
-{
-  "name": "enrollment-proxy",
-  "scripts": { "start": "node proxy.js" }
+// Minimal rank-setting proxy. Needs Node 18+ (built-in fetch). No npm packages.
+// Run:  ROBLOX_API_KEY=xxxx PROXY_SECRET=CHANGE_ME node proxy.js
+// Host it anywhere with HTTPS (Render, Railway, Fly.io, etc).
+
+const http = require("http");
+
+const API_KEY = process.env.ROBLOX_API_KEY;
+const SECRET = process.env.PROXY_SECRET;
+const ALLOWED_GROUP = "35963176";
+const ALLOWED_RANKS = [2, 3, 4, 5]; // never allow anything above grade ranks
+
+async function setRank(groupId, userId, rank) {
+  const base = `https://apis.roblox.com/cloud/v2/groups/${groupId}`;
+
+  // Find the role whose rank number matches
+  const rolesRes = await fetch(`${base}/roles?maxPageSize=50`, {
+    headers: { "x-api-key": API_KEY },
+  });
+  if (!rolesRes.ok) throw new Error("roles lookup failed: " + (await rolesRes.text()));
+  const { groupRoles } = await rolesRes.json();
+  const role = groupRoles.find((r) => r.rank === rank);
+  if (!role) throw new Error("no role with rank " + rank);
+
+  // Update the member's role
+  const patch = await fetch(`${base}/memberships/${userId}`, {
+    method: "PATCH",
+    headers: { "x-api-key": API_KEY, "Content-Type": "application/json" },
+    body: JSON.stringify({ role: role.path }),
+  });
+  if (!patch.ok) throw new Error("role update failed: " + (await patch.text()));
 }
+
+http
+  .createServer((req, res) => {
+    if (req.method !== "POST" || req.url !== "/set-rank") {
+      res.writeHead(404).end();
+      return;
+    }
+    if (req.headers["x-proxy-secret"] !== SECRET) {
+      res.writeHead(401).end("bad secret");
+      return;
+    }
+    let body = "";
+    req.on("data", (c) => (body += c));
+    req.on("end", async () => {
+      try {
+        const { groupId, userId, rank } = JSON.parse(body);
+        if (String(groupId) !== ALLOWED_GROUP || !ALLOWED_RANKS.includes(rank) || !Number.isInteger(userId)) {
+          res.writeHead(400).end("invalid request");
+          return;
+        }
+        await setRank(groupId, userId, rank);
+        res.writeHead(200).end("ok");
+      } catch (e) {
+        console.error(e.message);
+        res.writeHead(500).end(e.message);
+      }
+    });
+  })
+  .listen(process.env.PORT || 3000, () => console.log("proxy running"));
